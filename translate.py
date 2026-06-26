@@ -82,7 +82,8 @@ def write_bilingual_srt(cues: list[Cue], zh: list[str], path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # llama.cpp (llama-server) 调用 —— OpenAI 兼容接口
 # --------------------------------------------------------------------------- #
-def llm_chat(host: str, model: str, system: str, user: str, json_mode: bool) -> str:
+def llm_chat(host: str, model: str, system: str, user: str, json_mode: bool,
+             max_tokens: int | None = None) -> str:
     payload = {
         "model": model,                 # llama-server 单模型,此字段被忽略
         "messages": [
@@ -92,6 +93,8 @@ def llm_chat(host: str, model: str, system: str, user: str, json_mode: bool) -> 
         "stream": False,
         "temperature": 0.2,
     }
+    if max_tokens:                      # 上限,防止模型跑飞撑满上下文被截断
+        payload["max_tokens"] = max_tokens
     if json_mode:
         # llama.cpp 支持 OpenAI 风格的 json_object,内部用 GBNF 约束,保证合法 JSON
         payload["response_format"] = {"type": "json_object"}
@@ -129,8 +132,10 @@ def translate_batch(host: str, model: str, cues: list[Cue]) -> list[str]:
         "键为原编号字符串,值为对应中文译文,数量必须和输入完全一致。\n\n"
         + numbered
     )
+    # 译文通常每条几十 token,留足余量即可;上限防止模型啰嗦撑爆每槽上下文
+    cap = max(256, len(cues) * 120)
     try:
-        raw = llm_chat(host, model, SYSTEM_PROMPT, user, json_mode=True)
+        raw = llm_chat(host, model, SYSTEM_PROMPT, user, json_mode=True, max_tokens=cap)
         obj = json.loads(raw)
         result = [str(obj.get(str(i + 1), "")).strip() for i in range(len(cues))]
         if all(result):  # 全部有译文才算成功
@@ -144,7 +149,8 @@ def translate_batch(host: str, model: str, cues: list[Cue]) -> list[str]:
     for c in cues:
         try:
             t = llm_chat(host, model, SYSTEM_PROMPT,
-                         f"把这句日文翻译成中文,只输出译文:\n{c.text}", json_mode=False)
+                         f"把这句日文翻译成中文,只输出译文:\n{c.text}",
+                         json_mode=False, max_tokens=256)
         except urllib.error.URLError as e:
             log.error("单条翻译失败,保留原文: %s", e)
             t = c.text
@@ -223,7 +229,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("-m", "--model", default=DEFAULT_MODEL,
                     help="模型名(llama-server 单模型时此字段被忽略,仅记录用)")
     ap.add_argument("--host", default=DEFAULT_HOST, help="llama-server 地址")
-    ap.add_argument("--batch", type=int, default=20, help="每批翻译多少条字幕")
+    ap.add_argument("--batch", type=int, default=10,
+                    help="每批翻译多少条字幕(太大易超出每槽上下文被截断)")
     ap.add_argument("--concurrency", type=int, default=4,
                     help="并发请求数(对应 llama-server 的 -np 槽位,越大越快)")
     ap.add_argument("--bilingual", action="store_true", help="同时输出中日双语字幕")
