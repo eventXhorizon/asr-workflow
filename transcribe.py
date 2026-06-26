@@ -97,6 +97,14 @@ def write_wav(audio, dst: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 输出格式
 # --------------------------------------------------------------------------- #
+def with_ext(base: Path, ext: str) -> Path:
+    """在完整文件名后追加扩展名,避免 with_suffix 误删含点文件名的最后一段。
+
+    例:"a.b.c"(stem)→ "a.b.c.srt",而 with_suffix(".srt") 会得到错误的 "a.b.srt"。
+    """
+    return base.with_name(base.name + ext)
+
+
 def fmt_ts(seconds: float, sep: str = ",") -> str:
     """秒 -> HH:MM:SS,mmm (srt) 或 HH:MM:SS.mmm (vtt)。"""
     if seconds < 0:
@@ -144,7 +152,7 @@ def write_json(segments: list[dict], info: dict, path: Path) -> None:
 # --------------------------------------------------------------------------- #
 def transcribe_one(model, src: Path, args: Args) -> None:
     out_base = (args.outdir or src.parent) / src.stem
-    srt_path = out_base.with_suffix(".srt")
+    srt_path = with_ext(out_base,".srt")
     if srt_path.exists() and not args.overwrite:
         log.info("已存在,跳过(用 --overwrite 覆盖): %s", srt_path.name)
         return
@@ -154,7 +162,7 @@ def transcribe_one(model, src: Path, args: Args) -> None:
 
     audio = decode_audio(src)                 # 就地读视频,音频进内存,不落临时文件
     if args.keep_wav:
-        write_wav(audio, out_base.with_suffix(".wav"))
+        write_wav(audio, with_ext(out_base,".wav"))
 
     log.info("开始转写: %s (vad=%s)", src.name, "off" if args.no_vad else "on")
     seg_iter, info = model.transcribe(
@@ -209,11 +217,11 @@ def transcribe_one(model, src: Path, args: Args) -> None:
     if "srt" in args.formats:
         write_srt(segments, srt_path); written.append(srt_path.name)
     if "vtt" in args.formats:
-        p = out_base.with_suffix(".vtt"); write_vtt(segments, p); written.append(p.name)
+        p = with_ext(out_base,".vtt"); write_vtt(segments, p); written.append(p.name)
     if "txt" in args.formats:
-        p = out_base.with_suffix(".txt"); write_txt(segments, p); written.append(p.name)
+        p = with_ext(out_base,".txt"); write_txt(segments, p); written.append(p.name)
     if "json" in args.formats:
-        p = out_base.with_suffix(".json"); write_json(segments, info_dict, p); written.append(p.name)
+        p = with_ext(out_base,".json"); write_json(segments, info_dict, p); written.append(p.name)
 
     log.info("完成 %s -> %s", src.name, ", ".join(written))
 

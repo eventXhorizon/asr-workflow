@@ -169,10 +169,12 @@ def run_transcribe(job: Job, jd: Path, logf) -> Path:
         cmd += ["--vad-threshold", str(job.vad_threshold)]
     logf.write(f"\n[转写] {' '.join(cmd)}\n"); logf.flush()
     subprocess.run(cmd, stdout=logf, stderr=subprocess.STDOUT, cwd=str(PROJECT_DIR), check=True)
-    srt = jd / (Path(job.video).stem + ".srt")
-    if not srt.exists():
+    # 任务目录是新建的,这时只会有 ASR 产出的 srt(.zh/.bilingual 翻译后才有)
+    srts = [p for p in jd.glob("*.srt")
+            if not p.name.endswith((".zh.srt", ".bilingual.srt"))]
+    if not srts:
         raise RuntimeError("转写完成但未找到 srt(可能整段无语音)")
-    return srt
+    return srts[0]
 
 
 def run_translate(job: Job, srt: Path, logf) -> None:
