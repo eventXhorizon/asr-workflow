@@ -253,6 +253,16 @@ def refresh():
     return rows, badge
 
 
+def on_upload(f):
+    if not f:
+        return ""
+    try:
+        gb = os.path.getsize(f) / 1e9
+        return f"✅ 上传完成:{Path(f).name}  ({gb:.2f} GB),可点「加入队列」"
+    except OSError:
+        return f"✅ 上传完成:{Path(f).name}"
+
+
 def view_job(job_id):
     job_id = (job_id or "").strip()
     with JOBS_LOCK:
@@ -275,6 +285,7 @@ def build_ui() -> gr.Blocks:
             upload = gr.File(label="① 上传视频(从本机/能访问的网络位置选择;适合在别的电脑上的视频)",
                              file_types=[".mp4", ".mkv", ".mov", ".avi", ".webm", ".ts", ".m4v"],
                              type="filepath")
+            upload_status = gr.Markdown("上传大文件时,文件框内会显示上传进度条。")
             with gr.Row():
                 video = gr.Textbox(label="② 或填服务器上的视频路径",
                                    placeholder="/mnt/d/xxx.mp4(可直接粘贴)")
@@ -305,7 +316,9 @@ def build_ui() -> gr.Blocks:
             out_files = gr.Files(label="产物下载(完成的任务)")
             log_box = gr.Textbox(label="任务日志(末尾 8000 字)", lines=18, max_lines=18)
 
-        # FileExplorer 选中 → 填到文本框
+        # 上传完成 → 显示文件名/大小;FileExplorer 选中 → 填到文本框
+        upload.upload(on_upload, inputs=upload, outputs=upload_status)
+        upload.clear(lambda: "", outputs=upload_status)
         fe.change(lambda p: p if isinstance(p, str) else (p[0] if p else ""),
                   inputs=fe, outputs=video)
         submit.click(enqueue,
