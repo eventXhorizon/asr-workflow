@@ -42,6 +42,7 @@ python translate.py ~/out/video.srt --bilingual --host http://localhost:8080
 |------|------|
 | `transcribe.py` | 视频/音频 → 日语字幕(ffmpeg 抽音频 + faster-whisper) |
 | `translate.py` | 日语 srt → 中文 / 双语字幕(调本地 llama-server) |
+| `webapp.py` | **Web 后台**(Gradio):网页提交任务、排队、看进度/历史、下载字幕 |
 | `run.sh` | 一条龙:依次跑 transcribe + translate |
 | `start_llama.sh` | 启动 llama-server 翻译后端(模型路径走参数) |
 | `setup_wsl.sh` | WSL 环境一键配置(ffmpeg、venv、CUDA 库) |

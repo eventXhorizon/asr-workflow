@@ -116,6 +116,34 @@ python translate.py ./out --host http://192.168.10.130:8080    # 翻译服务在
 
 ---
 
+## Web 后台(webapp.py)
+
+网页提交任务、排队、看进度/历史、下载字幕。**llama-server 由它全自动托管**
+(转写阶段关掉腾显存,翻译阶段拉起),你无需手动开关。
+
+启动(在 venv 里,指定翻译模型和 llama-server 二进制):
+```bash
+cd ~/jp_asr && source .venv/bin/activate
+LLAMA_MODEL=~/models/Qwen3.6-...-Q4_K_M.gguf \
+LLAMA_BIN=~/llama.cpp/build/bin/llama-server \
+python webapp.py
+```
+然后浏览器打开 `http://192.168.10.130:7860`(mirrored 网络 + 防火墙放行 7860)。
+
+- **新建任务**:粘贴或从 `/mnt/d` 浏览选视频 → 选模型/VAD 阈值/是否双语 → 加入队列。
+- **任务队列/历史**:表格显示状态(排队/转写/翻译/完成),每 3 秒自动刷新;
+  复制任务 ID 可查看日志、下载产物。
+- 单 worker 串行处理,天然满足显存互斥;程序重启会恢复未完成任务。
+
+可用环境变量(均有默认):`LLAMA_MODEL`(必填)、`LLAMA_BIN`、`LLAMA_PORT`、
+`LLAMA_CTX`、`LLAMA_EXTRA`、`JP_ASR_OUT`(输出目录)、`JP_ASR_VIDEO_ROOT`(浏览根目录)、
+`JP_ASR_WEB_PORT`(默认 7860)。
+
+> 模型下载需联网,启动 webapp 的终端要带好代理/`HF_ENDPOINT` 和 `LD_LIBRARY_PATH`
+> (与命令行转写一致),子任务会继承这些环境变量。
+
+---
+
 ## 远程运行(从 Mac 操作那台 WSL 机)
 
 ```bash
