@@ -223,10 +223,11 @@ def worker() -> None:
 # --------------------------------------------------------------------------- #
 # Gradio UI
 # --------------------------------------------------------------------------- #
-def enqueue(video, fe_path, model, vad, no_vad, bilingual, formats):
-    path = (video or fe_path or "").strip()
+def enqueue(upload, video, fe_path, model, vad, no_vad, bilingual, formats):
+    # 优先级:上传的文件 > 手填路径 > 浏览选择
+    path = (upload or video or fe_path or "").strip()
     if not path:
-        return "⚠ 请填写或选择视频路径", *refresh()
+        return "⚠ 请上传视频、或填写/选择服务器上的视频路径", *refresh()
     if not Path(path).exists():
         return f"⚠ 文件不存在: {path}", *refresh()
     fmts = ",".join(formats) if formats else "srt,txt"
@@ -271,11 +272,15 @@ def build_ui() -> gr.Blocks:
         llama_status = gr.Markdown("⚪ llama-server 已停止")
 
         with gr.Tab("新建任务"):
+            upload = gr.File(label="① 上传视频(从本机/能访问的网络位置选择;适合在别的电脑上的视频)",
+                             file_types=[".mp4", ".mkv", ".mov", ".avi", ".webm", ".ts", ".m4v"],
+                             type="filepath")
             with gr.Row():
-                video = gr.Textbox(label="视频路径", placeholder="/mnt/d/xxx.mp4(可直接粘贴)")
-            fe = gr.FileExplorer(label=f"或从 {VIDEO_ROOT} 浏览选择(.mp4)",
+                video = gr.Textbox(label="② 或填服务器上的视频路径",
+                                   placeholder="/mnt/d/xxx.mp4(可直接粘贴)")
+            fe = gr.FileExplorer(label=f"③ 或从 {VIDEO_ROOT} 浏览选择(.mp4)",
                                  root_dir=VIDEO_ROOT, glob="**/*.mp4",
-                                 file_count="single", height=240)
+                                 file_count="single", height=200)
             with gr.Row():
                 model = gr.Dropdown(
                     ["large-v3", "kotoba-tech/kotoba-whisper-v2.0-faster", "large-v3-turbo"],
@@ -304,7 +309,7 @@ def build_ui() -> gr.Blocks:
         fe.change(lambda p: p if isinstance(p, str) else (p[0] if p else ""),
                   inputs=fe, outputs=video)
         submit.click(enqueue,
-                     inputs=[video, fe, model, vad, no_vad, bilingual, formats],
+                     inputs=[upload, video, fe, model, vad, no_vad, bilingual, formats],
                      outputs=[result, jobs_df, llama_status])
         view_btn.click(view_job, inputs=job_id_in, outputs=[log_box, out_files])
 
@@ -329,7 +334,9 @@ def recover_on_start() -> None:
 def main() -> None:
     recover_on_start()
     threading.Thread(target=worker, daemon=True).start()
-    build_ui().queue().launch(server_name="0.0.0.0", server_port=WEB_PORT)
+    # max_file_size 放开,允许上传大视频(几个 GB)
+    build_ui().queue().launch(server_name="0.0.0.0", server_port=WEB_PORT,
+                              max_file_size=os.environ.get("JP_ASR_MAX_UPLOAD", "20gb"))
 
 
 if __name__ == "__main__":
