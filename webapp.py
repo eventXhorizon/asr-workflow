@@ -223,9 +223,30 @@ def worker() -> None:
 # --------------------------------------------------------------------------- #
 # Gradio UI
 # --------------------------------------------------------------------------- #
-def enqueue(upload, video, fe_path, model, vad, no_vad, bilingual, formats):
-    # 优先级:上传的文件 > 手填路径 > 浏览选择
-    path = (upload or video or fe_path or "").strip()
+VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".ts", ".m4v")
+
+
+def list_videos(d):
+    """列出目录里的视频(只列当前层)。drvfs/机械盘偶发 I/O 错误时重试几次。"""
+    d = (d or "").strip()
+    if not d or not os.path.isdir(d):
+        return gr.update(choices=[], value=None)
+    names = None
+    for _ in range(3):
+        try:
+            names = os.listdir(d)
+            break
+        except OSError:
+            time.sleep(1)
+    if names is None:
+        return gr.update(choices=[], value=None)
+    files = sorted(os.path.join(d, n) for n in names if n.lower().endswith(VIDEO_EXTS))
+    return gr.update(choices=files, value=(files[0] if files else None))
+
+
+def enqueue(upload, video, model, vad, no_vad, bilingual, formats):
+    # 优先级:上传的文件 > 路径(手填或从目录选择填入)
+    path = (upload or video or "").strip()
     if not path:
         return "⚠ 请上传视频、或填写/选择服务器上的视频路径", *refresh()
     if not Path(path).exists():
@@ -287,11 +308,13 @@ def build_ui() -> gr.Blocks:
                              type="filepath")
             upload_status = gr.Markdown("上传大文件时,文件框内会显示上传进度条。")
             with gr.Row():
-                video = gr.Textbox(label="② 或填服务器上的视频路径",
-                                   placeholder="/mnt/d/xxx.mp4(可直接粘贴)")
-            fe = gr.FileExplorer(label=f"③ 或从 {VIDEO_ROOT} 浏览选择(.mp4)",
-                                 root_dir=VIDEO_ROOT, glob="**/*.mp4",
-                                 file_count="single", height=200)
+                video = gr.Textbox(label="② 或填服务器上的视频完整路径",
+                                   placeholder="/mnt/f/X_下载/xxx.mp4(可直接粘贴)")
+            with gr.Row():
+                browse_dir = gr.Textbox(value=VIDEO_ROOT, label="③ 或浏览目录", scale=3)
+                list_btn = gr.Button("列出视频", scale=1)
+            browse_pick = gr.Dropdown(choices=[], label="从目录选择(选中会自动填到②)",
+                                      interactive=True)
             with gr.Row():
                 model = gr.Dropdown(
                     ["large-v3", "kotoba-tech/kotoba-whisper-v2.0-faster", "large-v3-turbo"],
@@ -316,13 +339,13 @@ def build_ui() -> gr.Blocks:
             out_files = gr.Files(label="产物下载(完成的任务)")
             log_box = gr.Textbox(label="任务日志(末尾 8000 字)", lines=18, max_lines=18)
 
-        # 上传完成 → 显示文件名/大小;FileExplorer 选中 → 填到文本框
+        # 上传完成 → 显示文件名/大小;列目录 → 下拉;下拉选中 → 填到②路径框
         upload.upload(on_upload, inputs=upload, outputs=upload_status)
         upload.clear(lambda: "", outputs=upload_status)
-        fe.change(lambda p: p if isinstance(p, str) else (p[0] if p else ""),
-                  inputs=fe, outputs=video)
+        list_btn.click(list_videos, inputs=browse_dir, outputs=browse_pick)
+        browse_pick.change(lambda p: p or "", inputs=browse_pick, outputs=video)
         submit.click(enqueue,
-                     inputs=[upload, video, fe, model, vad, no_vad, bilingual, formats],
+                     inputs=[upload, video, model, vad, no_vad, bilingual, formats],
                      outputs=[result, jobs_df, llama_status])
         view_btn.click(view_job, inputs=job_id_in, outputs=[log_box, out_files])
 
