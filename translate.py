@@ -23,6 +23,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -181,11 +182,21 @@ def translate_file(src: Path, args) -> None:
         return
     log.info("翻译 %s,共 %d 条,分批 %d…", src.name, len(cues), args.batch)
 
+    # 分批 + 并发(llama-server 能同时处理多个请求,串行会让 GPU 空等)
+    batches = [(i, cues[i:i + args.batch]) for i in range(0, len(cues), args.batch)]
+    results: dict[int, list[str]] = {}
+    done = 0
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        futs = {ex.submit(translate_batch, args.host, args.model, chunk): i
+                for i, chunk in batches}
+        for fut in as_completed(futs):
+            i = futs[fut]
+            results[i] = fut.result()
+            done += len(results[i])
+            log.info("  进度 %d/%d", done, len(cues))
     zh: list[str] = []
-    for i in range(0, len(cues), args.batch):
-        chunk = cues[i:i + args.batch]
-        zh.extend(translate_batch(args.host, args.model, chunk))
-        log.info("  进度 %d/%d", min(i + args.batch, len(cues)), len(cues))
+    for i, _ in batches:                      # 按原顺序拼回,保证时间轴对齐
+        zh.extend(results[i])
 
     stem = src.name[:-len(".srt")] if src.name.endswith(".srt") else src.stem
     out_dir = args.outdir or src.parent
@@ -213,6 +224,8 @@ def main(argv: list[str]) -> int:
                     help="模型名(llama-server 单模型时此字段被忽略,仅记录用)")
     ap.add_argument("--host", default=DEFAULT_HOST, help="llama-server 地址")
     ap.add_argument("--batch", type=int, default=20, help="每批翻译多少条字幕")
+    ap.add_argument("--concurrency", type=int, default=4,
+                    help="并发请求数(对应 llama-server 的 -np 槽位,越大越快)")
     ap.add_argument("--bilingual", action="store_true", help="同时输出中日双语字幕")
     ap.add_argument("--only-bilingual", action="store_true", help="只输出双语,不输出纯中文")
     args = ap.parse_args(argv)
