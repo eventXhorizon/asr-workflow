@@ -43,21 +43,90 @@ python transcribe.py video.mp4 --no-vad
 
 - **llama.cpp 编译 / CUDA 部署**:见 [DEPLOY_WSL_CUDA.md](DEPLOY_WSL_CUDA.md)。
 
+- **WSL 看不到某个 Windows 盘(如 F:)**
+  `ls /mnt/` 没有该盘、或 `/mnt/f` 为空 = 没挂载(常见于后插入/移动硬盘)。手动挂:
+  ```bash
+  sudo mkdir -p /mnt/f && sudo mount -t drvfs 'F:\' /mnt/f
+  ls /mnt/f
+  ```
+  开机自动挂:`/etc/fstab` 加 `F: /mnt/f drvfs defaults 0 0`。
+  Windows 盘路径换算:`F:\X_下载` → `/mnt/f/X_下载`(盘符小写、无冒号、用 `/`)。
+
+---
+
+## Web 后台(webapp.py)类
+
+- **启动报 `Cannot find empty port in range: 7860`**
+  端口被占。换端口:`JP_ASR_WEB_PORT=7861 python webapp.py`。
+
+- **下载产物报 `InvalidPathError: Cannot move ... to the gradio cache dir`**
+  Gradio 5 默认禁止下载工作目录/临时目录之外的文件。`webapp.py` 已在 `launch` 加
+  `allowed_paths=[OUT_DIR]` 放行产物目录;若改了输出位置,记得同步加进 `allowed_paths`。
+
+- **目录浏览("列出视频")没反应 / 报 `OSError: [Errno 5] Input/output error`**
+  drvfs 对中文目录递归列目录会偶发 I/O 错误。`webapp.py` 已改为只列当前层 + 失败重试。
+  仍列不出时,直接在"② 路径框"粘贴完整路径即可(单个文件 ffmpeg 能正常读)。
+
+- **大视频(十几 GB)上传只转圈无进度**
+  浏览器上传大文件不合适。视频若在服务器本地(含挂载的 Windows 盘),**用路径选择,别上传**
+  ——流水线就地读取、不拷贝。
+
+- **任务一直"转写中"像没反应**
+  长视频要先从(机械)盘读一遍抽音频,几分钟正常。看实时进度:`tail -f ~/out/<任务ID>/log.txt`,
+  或网页点该任务行(日志会每 3 秒自动刷新)。
+
+- **网页 llama-server 显示"运行中"但转写阶段没腾显存**
+  webapp 只能停掉**自己启动**的 llama-server。若你**另外手动**起了一个,转写阶段它停不掉
+  (会在日志警告),可能与 ASR 抢显存。解决:别手动起,交给 webapp 全权托管。
+
 ---
 
 ## 翻译类
 
-- **翻译报"连不上 llama-server"**
-  确认服务在跑:`curl http://localhost:8080/health` 应返回 `{"status":"ok"}`。
-  没起来就启动 `llama-server`(见 DEPLOY_WSL_CUDA.md)。
+### 翻译又慢又频繁失败:Qwen3 思考(reasoning)没关 ⭐⭐
 
-- **`request (N tokens) exceeds the available context size`**
-  启动 `llama-server` 时上下文太小。加大 `-c`(如 `-c 16384`)并加 `-fa on`
-  (flash attention,省显存);或把 `translate.py --batch` 调小。
+**这是本项目踩得最深的坑。** 症状有两种,**根因都是模型在"思考"**:
+- 慢:翻一句"こんにちは"生成 426 token(绝大部分是推理),每批 20~30 秒;
+- 失败:`批量翻译失败(Expecting value: line 1 column 1 (char 0))`,即返回的 `content` 为空
+  (推理把 token 预算用光,还没轮到输出 JSON 就被 `max_tokens` 截断)。
 
-- **译文里混入推理过程 / `<think>`**
-  启动加 `--jinja --reasoning-budget 0` 关掉 Qwen3 的 thinking;
-  `translate.py` 也会兜底剥离 `<think>…</think>`。
+**判定**:对 llama-server 发一条请求看返回:
+```bash
+curl -s http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"翻译成中文:こんにちは"}],"chat_template_kwargs":{"enable_thinking":false},"stream":false}' \
+  | python3 -m json.tool
+```
+- 正常(思考已关):`content`="你好",**无 `reasoning_content`**,`completion_tokens` 个位数;
+- 异常(思考还开):有大段 `reasoning_content`,`completion_tokens` 几百。
+
+**解决(三道一起上,缺一可能不生效)**:
+1. 启动 llama-server 必带 **`--jinja --reasoning-budget 0`**;
+2. `translate.py` 每个请求已带 **`chat_template_kwargs={"enable_thinking": false}`**(需服务端 `--jinja`);
+3. 仍兜底剥离 `<think>…</think>`。
+
+> 经验:服务端 flag 有时对魔改/微调模型不生效,**客户端的 `enable_thinking=false` 才是关键**
+> (本项目即靠它最终关掉)。`--jinja` 是它生效的前提。
+
+### 批量翻译失败:返回被截断(上下文不够)
+
+即使思考已关,若 **`-np` 开太大**导致每槽上下文太小,长批仍可能被截断成非法 JSON。
+每槽上下文 = `-c ÷ -np`(如 `16384 ÷ 8 = 2048`)。日志里 `truncated = 1` 即此因。
+
+**解决**:
+- `translate.py --batch` 调小(默认已是 10,输出更短);
+- 或减小 `-np` / 增大 `-c`,让每槽上下文更宽;
+- `translate.py` 已对每请求设 `max_tokens` 上限,异常批快速失败并自动逐条回退,不丢段。
+
+### 翻译太慢(串行)
+
+`translate.py` 默认 **并发** 发批次(`--concurrency`,默认 4),对应 llama-server 的 `-np` 槽位。
+想更快:启动加 `-np 8`,翻译用 `--concurrency 8`。串行(并发=1)会让 GPU 空等网络往返。
+
+### 其它
+
+- **翻译报"连不上 llama-server"**:`curl http://localhost:8080/health` 应返回 `{"status":"ok"}`;
+  没起来就启动 llama-server(见 DEPLOY_WSL_CUDA.md)。
+- **`request (N tokens) exceeds the available context size`**:启动时 `-c` 太小,加大并加 `-fa on`。
 
 ---
 
