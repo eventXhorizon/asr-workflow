@@ -1,0 +1,5 @@
+# 日语 ASR 依赖
+# faster-whisper 会自动拉取 ctranslate2 / tokenizers / huggingface-hub 等
+faster-whisper>=1.1.0
+tqdm>=4.66.0
+# 翻译阶段(translate.py)只用标准库 urllib 调 llama.cpp 的 llama-server,无额外依赖

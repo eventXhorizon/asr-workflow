@@ -1,0 +1,23 @@
+# Python 虚拟环境 / 缓存
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# 模型权重与媒体文件(大文件,不入库)
+*.gguf
+*.bin
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.mkv
+*.mov
+*.webm
+
+# 转写/翻译输出
+/out/
+*.log
+
+# pip 镜像等本地配置
+pip.conf
