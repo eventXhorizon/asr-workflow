@@ -395,9 +395,10 @@ def recover_on_start() -> None:
 def main() -> None:
     recover_on_start()
     threading.Thread(target=worker, daemon=True).start()
-    # max_file_size 放开,允许上传大视频(几个 GB)
+    # max_file_size 放开上传;allowed_paths 让产物目录(在工作目录外)可被下载
     build_ui().queue().launch(server_name="0.0.0.0", server_port=WEB_PORT,
-                              max_file_size=os.environ.get("JP_ASR_MAX_UPLOAD", "20gb"))
+                              max_file_size=os.environ.get("JP_ASR_MAX_UPLOAD", "20gb"),
+                              allowed_paths=[str(OUT_DIR)])
 
 
 if __name__ == "__main__":
