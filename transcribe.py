@@ -15,7 +15,6 @@ import logging
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,22 +59,39 @@ def ensure_ffmpeg() -> None:
         sys.exit(1)
 
 
-def extract_audio(src: Path, dst: Path) -> None:
-    """抽取为 16kHz / 单声道 / pcm_s16le wav —— Whisper 系模型的标准输入。"""
+def decode_audio(src: Path):
+    """ffmpeg 就地读视频,把音频解码进内存(16kHz 单声道 float32),不落临时文件。
+
+    源视频原文件不动、不拷贝;返回的 numpy 数组直接喂给 faster-whisper。
+    """
+    import numpy as np
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-nostdin",
         "-i", str(src),
         "-vn",                  # 丢掉视频流
         "-ar", "16000",         # 16kHz
         "-ac", "1",             # 单声道
-        "-c:a", "pcm_s16le",
-        str(dst),
+        "-f", "f32le", "-",     # 裸 float32 PCM 输出到 stdout(管道进内存)
     ]
-    log.info("抽取音频: %s", src.name)
-    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    log.info("解码音频到内存: %s", src.name)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode != 0:
-        log.error("ffmpeg 失败 (%s):\n%s", src.name, proc.stderr[-2000:])
+        log.error("ffmpeg 失败 (%s):\n%s", src.name,
+                  proc.stderr.decode("utf-8", "ignore")[-2000:])
         raise RuntimeError(f"ffmpeg failed for {src}")
+    return np.frombuffer(proc.stdout, dtype=np.float32)
+
+
+def write_wav(audio, dst: Path) -> None:
+    """把内存里的 float32 音频写成 16-bit wav(仅 --keep-wav 时用)。"""
+    import wave
+    import numpy as np
+    pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2")
+    with wave.open(str(dst), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm16.tobytes())
 
 
 # --------------------------------------------------------------------------- #
@@ -136,52 +152,49 @@ def transcribe_one(model, src: Path, args: Args) -> None:
     if args.outdir:
         args.outdir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        wav = Path(tmp) / f"{src.stem}.wav"
-        extract_audio(src, wav)
+    audio = decode_audio(src)                 # 就地读视频,音频进内存,不落临时文件
+    if args.keep_wav:
+        write_wav(audio, out_base.with_suffix(".wav"))
 
-        log.info("开始转写: %s (vad=%s)", src.name, "off" if args.no_vad else "on")
-        seg_iter, info = model.transcribe(
-            str(wav),
-            language=args.language,
-            beam_size=args.beam_size,
-            # VAD 默认开(跳静音);带 BGM 的视频若漏说话段,用 --no-vad 或调低 --vad-threshold
-            vad_filter=not args.no_vad,
-            vad_parameters=(None if args.no_vad else
-                            {"min_silence_duration_ms": 500, "threshold": args.vad_threshold}),
-            word_timestamps=("json" in args.formats),
-            # 关掉"以前文为条件"可减少长音频跳段/重复(默认开,质量更连贯)
-            condition_on_previous_text=not args.no_condition,
-        )
+    log.info("开始转写: %s (vad=%s)", src.name, "off" if args.no_vad else "on")
+    seg_iter, info = model.transcribe(
+        audio,
+        language=args.language,
+        beam_size=args.beam_size,
+        # VAD 默认开(跳静音);带 BGM 的视频若漏说话段,用 --no-vad 或调低 --vad-threshold
+        vad_filter=not args.no_vad,
+        vad_parameters=(None if args.no_vad else
+                        {"min_silence_duration_ms": 500, "threshold": args.vad_threshold}),
+        word_timestamps=("json" in args.formats),
+        # 关掉"以前文为条件"可减少长音频跳段/重复(默认开,质量更连贯)
+        condition_on_previous_text=not args.no_condition,
+    )
 
-        total = round(info.duration, 1)
-        log.info("时长 %.1fs,检测语言 %s(p=%.2f),逐段解码中…",
-                 total, info.language, info.language_probability)
+    total = round(info.duration, 1)
+    log.info("时长 %.1fs,检测语言 %s(p=%.2f),逐段解码中…",
+             total, info.language, info.language_probability)
 
-        segments: list[dict] = []
-        try:
-            from tqdm import tqdm
-            bar = tqdm(total=total, unit="s", desc=src.stem[:20], dynamic_ncols=True)
-        except ImportError:
-            bar = None
+    segments: list[dict] = []
+    try:
+        from tqdm import tqdm
+        bar = tqdm(total=total, unit="s", desc=src.stem[:20], dynamic_ncols=True)
+    except ImportError:
+        bar = None
 
-        for seg in seg_iter:  # 注意:faster-whisper 是惰性生成器,这里才真正算
-            item: dict = {"start": seg.start, "end": seg.end, "text": seg.text}
-            if seg.words:
-                item["words"] = [
-                    {"start": w.start, "end": w.end, "word": w.word, "prob": w.probability}
-                    for w in seg.words
-                ]
-            segments.append(item)
-            if bar:
-                bar.n = min(seg.end, total)
-                bar.refresh()
+    for seg in seg_iter:  # 注意:faster-whisper 是惰性生成器,这里才真正算
+        item: dict = {"start": seg.start, "end": seg.end, "text": seg.text}
+        if seg.words:
+            item["words"] = [
+                {"start": w.start, "end": w.end, "word": w.word, "prob": w.probability}
+                for w in seg.words
+            ]
+        segments.append(item)
         if bar:
-            bar.n = total
-            bar.close()
-
-        if args.keep_wav:
-            shutil.copy(wav, out_base.with_suffix(".wav"))
+            bar.n = min(seg.end, total)
+            bar.refresh()
+    if bar:
+        bar.n = total
+        bar.close()
 
     if not segments:
         log.warning("没有解码出任何语音段: %s", src.name)
