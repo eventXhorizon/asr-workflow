@@ -312,6 +312,15 @@ def view_job(job_id):
     return log, (files or None)
 
 
+def tick_log(job_id):
+    """定时器调用:自动重载当前查看任务的日志(实时 tail)。"""
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return gr.update()        # 没选任务则不改动
+    log, _ = view_job(job_id)
+    return log
+
+
 def on_select_row(evt: gr.SelectData):
     """点任务列表某行 → 自动填 ID 并显示日志/产物。"""
     with JOBS_LOCK:
@@ -380,6 +389,7 @@ def build_ui() -> gr.Blocks:
 
         timer = gr.Timer(3.0)
         timer.tick(refresh, outputs=[jobs_df, llama_status])
+        timer.tick(tick_log, inputs=job_id_in, outputs=log_box)   # 日志实时刷新
         demo.load(refresh, outputs=[jobs_df, llama_status])
     return demo
 
