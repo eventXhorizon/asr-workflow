@@ -286,16 +286,38 @@ def on_upload(f):
         return f"✅ 上传完成:{Path(f).name}"
 
 
+def job_files(jd: Path) -> list[str]:
+    """列出任务目录里的产物(srt/txt/vtt/json),不管任务状态——
+    只要文件在就能下载(点文件即下载到你的电脑)。"""
+    if not jd.exists():
+        return []
+    return sorted(str(p) for p in jd.glob("*")
+                  if p.suffix in {".srt", ".txt", ".vtt", ".json"})
+
+
 def view_job(job_id):
     job_id = (job_id or "").strip()
     with JOBS_LOCK:
         job = JOBS.get(job_id)
     if not job:
         return "请选择/填写有效的任务 ID", None
-    log_path = jobdir(job_id) / "log.txt"
+    jd = jobdir(job_id)
+    log_path = jd / "log.txt"
     log = log_path.read_text(encoding="utf-8")[-8000:] if log_path.exists() else "(无日志)"
-    files = job.outputs if job.status == "done" else None
-    return log, files
+    files = job_files(jd)
+    return log, (files or None)
+
+
+def on_select_row(evt: gr.SelectData):
+    """点任务列表某行 → 自动填 ID 并显示日志/产物。"""
+    with JOBS_LOCK:
+        jobs_sorted = sorted(JOBS.values(), key=lambda x: x.created, reverse=True)
+    row = evt.index[0] if evt.index else -1
+    if not (0 <= row < len(jobs_sorted)):
+        return "", "请选择有效任务", None
+    jid = jobs_sorted[row].id
+    log, files = view_job(jid)
+    return jid, log, files
 
 
 def build_ui() -> gr.Blocks:
@@ -338,7 +360,7 @@ def build_ui() -> gr.Blocks:
             with gr.Row():
                 job_id_in = gr.Textbox(label="查看任务 ID(从上表复制)", scale=3)
                 view_btn = gr.Button("查看日志/产物", scale=1)
-            out_files = gr.Files(label="产物下载(完成的任务)")
+            out_files = gr.Files(label="产物下载(点文件即下载到你的电脑/Mac)")
             log_box = gr.Textbox(label="任务日志(末尾 8000 字)", lines=18, max_lines=18)
 
         # 上传完成 → 显示文件名/大小;列目录 → 下拉;下拉选中 → 填到②路径框
@@ -350,6 +372,7 @@ def build_ui() -> gr.Blocks:
                      inputs=[upload, video, model, vad, no_vad, bilingual, formats],
                      outputs=[result, jobs_df, llama_status])
         view_btn.click(view_job, inputs=job_id_in, outputs=[log_box, out_files])
+        jobs_df.select(on_select_row, outputs=[job_id_in, log_box, out_files])
 
         timer = gr.Timer(3.0)
         timer.tick(refresh, outputs=[jobs_df, llama_status])
