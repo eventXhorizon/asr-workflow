@@ -92,6 +92,8 @@ def llm_chat(host: str, model: str, system: str, user: str, json_mode: bool,
         ],
         "stream": False,
         "temperature": 0.2,
+        # 客户端强制关闭 Qwen3 思考(需服务端带 --jinja);避免推理吃光输出
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     if max_tokens:                      # 上限,防止模型跑飞撑满上下文被截断
         payload["max_tokens"] = max_tokens
