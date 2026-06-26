@@ -262,8 +262,8 @@ def parse_args(argv: list[str]) -> Args:
     ap.add_argument("--overwrite", action="store_true", help="已有结果也重新转写")
     ap.add_argument("--no-vad", action="store_true",
                     help="关闭 VAD(带 BGM/漏说话段时用;但纯静音处可能出幻觉)")
-    ap.add_argument("--vad-threshold", type=float, default=0.5,
-                    help="VAD 语音判定阈值,越低越不容易把说话当噪音删(默认 0.5,漏段可试 0.2)")
+    ap.add_argument("--vad-threshold", type=float, default=0.2,
+                    help="VAD 语音判定阈值,越低越不容易把说话当噪音删(默认 0.2,带 BGM 友好)")
     ap.add_argument("--no-condition", action="store_true",
                     help="关闭 condition_on_previous_text,减少长音频跳段/重复")
     a = ap.parse_args(argv)

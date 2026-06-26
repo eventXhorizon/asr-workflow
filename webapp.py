@@ -43,6 +43,8 @@ LLAMA_PORT = int(os.environ.get("LLAMA_PORT", "8080"))
 LLAMA_NGL = os.environ.get("LLAMA_NGL", "99")
 LLAMA_CTX = os.environ.get("LLAMA_CTX", "16384")
 LLAMA_EXTRA = os.environ.get("LLAMA_EXTRA", "--jinja --reasoning-budget 0 -fa on")
+LLAMA_NP = os.environ.get("LLAMA_NP", "8")               # llama-server 并行槽位
+TRANSLATE_CONCURRENCY = os.environ.get("JP_ASR_CONCURRENCY", LLAMA_NP)  # 翻译并发数
 LLAMA_URL = f"http://127.0.0.1:{LLAMA_PORT}"
 
 OUT_DIR = Path(os.environ.get("JP_ASR_OUT", str(HOME / "out")))
@@ -127,7 +129,8 @@ def start_llama(logf) -> None:
         if llama_running():
             return
         cmd = [LLAMA_BIN, "-m", MODEL_PATH, "-ngl", LLAMA_NGL, "-c", LLAMA_CTX,
-               "--host", "0.0.0.0", "--port", str(LLAMA_PORT), *shlex.split(LLAMA_EXTRA)]
+               "-np", LLAMA_NP, "--host", "0.0.0.0", "--port", str(LLAMA_PORT),
+               *shlex.split(LLAMA_EXTRA)]
         logf.write(f"\n[llama] 启动: {' '.join(cmd)}\n"); logf.flush()
         _llama_proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
         for _ in range(180):                      # 最多等 6 分钟(首载较慢)
@@ -178,7 +181,8 @@ def run_transcribe(job: Job, jd: Path, logf) -> Path:
 
 
 def run_translate(job: Job, srt: Path, logf) -> None:
-    cmd = [PYTHON, str(PROJECT_DIR / "translate.py"), str(srt), "--host", LLAMA_URL]
+    cmd = [PYTHON, str(PROJECT_DIR / "translate.py"), str(srt), "--host", LLAMA_URL,
+           "--concurrency", str(TRANSLATE_CONCURRENCY)]
     if job.bilingual:
         cmd.append("--bilingual")
     logf.write(f"\n[翻译] {' '.join(cmd)}\n"); logf.flush()
